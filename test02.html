@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Color Grid</title>
+<style>
+    .grid-container {
+        display: grid;
+        grid-template-columns: repeat(var(--num-cols, 10), var(--cell-size, 50px));
+        grid-template-rows: repeat(var(--num-rows, 10), var(--cell-size, 50px));
+        position: relative;
+    }
+
+    .grid-item {
+        border: 1px solid black;
+        width: var(--cell-size, 50px);
+        height: var(--cell-size, 50px);
+        background-color: lightblue;
+        position: relative;
+    }
+
+    .robot {
+        width: var(--cell-size, 50px);
+        height: var(--cell-size, 50px);
+        background-color: yellow;
+        border-radius: 50%;
+        position: absolute;
+        transition: transform 0.5s; /* 动画效果 */
+    }
+</style>
+</head>
+<body>
+<div>
+    <label for="numRows">Rows: </label>
+    <input type="number" id="numRows" value="10">
+    <label for="numCols">Columns: </label>
+    <input type="number" id="numCols" value="10">
+    <label for="cellSize">Cell Size: </label>
+    <input type="number" id="cellSize" value="50">
+    <button onclick="createGrid()">Create Grid</button>
+</div>
+<div class="grid-container"></div>
+<div>
+    <label>黑色(牆壁、障礙)</label>
+    <button id="borderBtn">邊框編輯</button>
+    <label>白色(可活動區域)</label>
+    <button id="areaBtn">區域編輯</button>
+    <label>紅色(充電台)</label>
+    <button id="startBtn">起點放置</button>
+    <button id="placeRobotBtn">放置機器人</button>
+    <button id="startProcessBtn">開始</button>
+    <button id="resetBtn">重製</button>
+</div>
+
+<script>
+let editMode = 'border';
+let startColor = 'red';
+let startPoint = null;
+let numRows, numCols;
+let gridMatrix = [];
+let robot = null;
+let robotPosition = {row: null, col: null};
+let cleaningInterval = null;
+
+function createGrid() {
+    numRows = document.getElementById('numRows').value;
+    numCols = document.getElementById('numCols').value;
+    const cellSize = document.getElementById('cellSize').value + 'px';
+
+    document.querySelector('.grid-container').style.setProperty('--num-rows', numRows);
+    document.querySelector('.grid-container').style.setProperty('--num-cols', numCols);
+    document.querySelector('.grid-container').style.setProperty('--cell-size', cellSize);
+
+    document.querySelector('.grid-container').innerHTML = '';
+
+    const gridContainer = document.querySelector('.grid-container');
+    gridMatrix = [];
+
+    for (let i = 0; i < numRows; i++) {
+        const row = [];
+        for (let j = 0; j < numCols; j++) {
+            const gridItem = document.createElement('div');
+            gridItem.classList.add('grid-item');
+            gridItem.style.gridColumn = j + 1;
+            gridItem.style.gridRow = i + 1;
+            gridItem.dataset.row = i;
+            gridItem.dataset.col = j;
+
+            gridItem.addEventListener("contextmenu", e => e.preventDefault());
+            gridItem.addEventListener('mousedown', function(event) {
+                if (event.button === 0) {
+                    switch (editMode) {
+                        case 'border':
+                            gridItem.style.backgroundColor = 'black';
+                            break;
+                        case 'area':
+                            gridItem.style.backgroundColor = 'white';
+                            break;
+                        case 'start':
+                            if (startPoint) {
+                                startPoint.style.backgroundColor = 'lightblue';
+                            }
+                            gridItem.style.backgroundColor = startColor;
+                            startPoint = gridItem;
+                            break;
+                    }
+                } else if (event.button === 2) {
+                    gridItem.style.backgroundColor = 'lightblue';
+                }
+            });
+            gridContainer.appendChild(gridItem);
+            row.push(gridItem);
+        }
+        gridMatrix.push(row);
+    }
+
+    // 添加机器人
+    if (!robot) {
+        robot = document.createElement('div');
+        robot.classList.add('robot');
+        document.querySelector('.grid-container').appendChild(robot);
+    } else {
+        document.querySelector('.grid-container').appendChild(robot);
+    }
+}
+
+document.getElementById('borderBtn').addEventListener('click', function() {
+    editMode = 'border';
+});
+
+document.getElementById('areaBtn').addEventListener('click', function() {
+    editMode = 'area';
+});
+
+document.getElementById('startBtn').addEventListener('click', function() {
+    editMode = 'start';
+});
+
+document.getElementById('placeRobotBtn').addEventListener('click', function() {
+    if (startPoint) {
+        const row = parseInt(startPoint.dataset.row);
+        const col = parseInt(startPoint.dataset.col);
+        robotPosition = {row, col};
+        moveRobotTo(row, col);
+    } else {
+        alert('请先设置起点！');
+    }
+});
+
+document.getElementById('startProcessBtn').addEventListener('click', function() {
+    if (startPoint) {
+        startCleaning();
+    } else {
+        alert('请先设置起点并放置机器人！');
+    }
+});
+
+document.getElementById('resetBtn').addEventListener('click', function() {
+    if (cleaningInterval) {
+        clearInterval(cleaningInterval);
+        cleaningInterval = null;
+    }
+    startPoint = null;
+    robotPosition = {row: null, col: null};
+    createGrid();
+});
+
+async function startCleaning() {
+    let {row: startRow, col: startCol} = robotPosition;
+
+    let stack = [[startRow, startCol]];
+    let path = [];
+    let visited = Array.from({length: numRows}, () => Array(numCols).fill(false));
+    visited[startRow][startCol] = true;
+
+    while (stack.length > 0) {
+        let [row, col] = stack.pop();
+        let gridItem = gridMatrix[row][col];
+        gridItem.style.backgroundColor = 'green';
+        path.push([row, col]);
+        await delay(500);
+        moveRobotTo(row, col);
+
+        let directions = [
+            [0, 1],   // 右
+            [1, 0],   // 下
+            [0, -1],  // 左
+            [-1, 0]   // 上
+        ];
+
+        for (let [dRow, dCol] of directions) {
+            let newRow = row + dRow;
+            let newCol = col + dCol;
+            if (newRow >= 0 && newRow < numRows && newCol >= 0 && newCol < numCols &&
+                (gridMatrix[newRow][newCol].style.backgroundColor === 'white' || gridMatrix[newRow][newCol].style.backgroundColor === 'red') &&
+                !visited[newRow][newCol]) {
+                visited[newRow][newCol] = true;
+                stack.push([newRow, newCol]);
+            }
+        }
+    }
+
+    // 将清扫路径标记为蓝色（已清扫）
+    for (let [row, col] of path) {
+        gridMatrix[row][col].style.backgroundColor = 'blue';
+    }
+
+    // 最后将起点恢复为红色并返回起点
+    startPoint.style.backgroundColor = startColor;
+    for (let i = path.length - 1; i >= 0; i--) {
+        let [row, col] = path[i];
+        await delay(500);
+        moveRobotTo(row, col);
+    }
+    moveRobotTo(startRow, startCol);
+}
+
+function moveRobotTo(row, col) {
+    const cellSize = parseInt(document.getElementById('cellSize').value);
+    robot.style.transform = `translate(${col * cellSize}px, ${row * cellSize}px)`;
+}
+
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+</script>
+</body>
+</html>

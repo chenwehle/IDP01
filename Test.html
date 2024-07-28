@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>顏色網格</title>
+<style>
+    .grid-container {
+        display: grid;
+        grid-template-columns: repeat(var(--num-cols, 10), var(--cell-size, 50px));
+        grid-template-rows: repeat(var(--num-rows, 10), var(--cell-size, 50px));
+        position: relative;
+    }
+
+    .grid-item {
+        border: 1px solid black;
+        width: var(--cell-size, 50px);
+        height: var(--cell-size, 50px);
+        background-color: lightblue;
+        position: relative;
+    }
+
+    .robot {
+        width: var(--cell-size, 50px);
+        height: var(--cell-size, 50px);
+        background-color: yellow;
+        border-radius: 50%;
+        position: absolute;
+        transition: transform 0.5s; /* 動畫效果 */
+    }
+</style>
+</head>
+<body>
+<div>
+    <label for="numRows">行數: </label>
+    <input type="number" id="numRows" value="10">
+    <label for="numCols">列數: </label>
+    <input type="number" id="numCols" value="10">
+    <label for="cellSize">格子大小: </label>
+    <input type="number" id="cellSize" value="50">
+    <button onclick="createGrid()">生成網格</button>
+</div>
+<div class="grid-container"></div>
+<div>
+    <label>黑色(牆壁、障礙)</label>
+    <button id="borderBtn">邊框編輯</button>
+    <label>白色(可活動區域)</label>
+    <button id="areaBtn">區域編輯</button>
+    <label>紅色(充電台)</label>
+    <button id="startBtn">起點放置</button>
+    <button id="placeRobotBtn">放置機器人</button>
+    <button id="startProcessBtn">開始</button>
+    <button id="resetBtn">重置</button>
+    <label for="algorithm">選擇演算法: </label>
+    <select id="algorithm">
+        <option value="dfs">深度優先搜索 (DFS)</option>
+        <option value="bfs">廣度優先搜索 (BFS)</option>
+        <option value="best">最佳優先搜索 (Best-First Search)</option>
+        <option value="astar">A* 搜索 (A* Search)</option>
+    </select>
+</div>
+
+<script>
+let editMode = 'border';
+let startColor = 'red';
+let startPoint = null;
+let numRows, numCols;
+let gridMatrix = [];
+let robot = null;
+let robotPosition = {row: null, col: null};
+let cleaningInterval = null;
+
+function createGrid() {
+    numRows = document.getElementById('numRows').value;
+    numCols = document.getElementById('numCols').value;
+    const cellSize = document.getElementById('cellSize').value + 'px';
+
+    document.querySelector('.grid-container').style.setProperty('--num-rows', numRows);
+    document.querySelector('.grid-container').style.setProperty('--num-cols', numCols);
+    document.querySelector('.grid-container').style.setProperty('--cell-size', cellSize);
+
+    document.querySelector('.grid-container').innerHTML = '';
+
+    const gridContainer = document.querySelector('.grid-container');
+    gridMatrix = [];
+
+    for (let i = 0; i < numRows; i++) {
+        const row = [];
+        for (let j = 0; j < numCols; j++) {
+            const gridItem = document.createElement('div');
+            gridItem.classList.add('grid-item');
+            gridItem.style.gridColumn = j + 1;
+            gridItem.style.gridRow = i + 1;
+            gridItem.dataset.row = i;
+            gridItem.dataset.col = j;
+
+            gridItem.addEventListener("contextmenu", e => e.preventDefault());
+            gridItem.addEventListener('mousedown', function(event) {
+                if (event.button === 0) {
+                    switch (editMode) {
+                        case 'border':
+                            gridItem.style.backgroundColor = 'black';
+                            break;
+                        case 'area':
+                            gridItem.style.backgroundColor = 'white';
+                            break;
+                        case 'start':
+                            if (startPoint) {
+                                startPoint.style.backgroundColor = 'lightblue';
+                            }
+                            gridItem.style.backgroundColor = startColor;
+                            startPoint = gridItem;
+                            break;
+                    }
+                } else if (event.button === 2) {
+                    gridItem.style.backgroundColor = 'lightblue';
+                }
+            });
+            gridContainer.appendChild(gridItem);
+            row.push(gridItem);
+        }
+        gridMatrix.push(row);
+    }
+
+    // 添加機器人
+    if (!robot) {
+        robot = document.createElement('div');
+        robot.classList.add('robot');
+        document.querySelector('.grid-container').appendChild(robot);
+    } else {
+        document.querySelector('.grid-container').appendChild(robot);
+    }
+}
+
+document.getElementById('borderBtn').addEventListener('click', function() {
+    editMode = 'border';
+});
+
+document.getElementById('areaBtn').addEventListener('click', function() {
+    editMode = 'area';
+});
+
+document.getElementById('startBtn').addEventListener('click', function() {
+    editMode = 'start';
+});
+
+document.getElementById('placeRobotBtn').addEventListener('click', function() {
+    if (startPoint) {
+        const row = parseInt(startPoint.dataset.row);
+        const col = parseInt(startPoint.dataset.col);
+        robotPosition = {row, col};
+        moveRobotTo(row, col);
+    } else {
+        alert('請先設置起點！');
+    }
+});
+
+document.getElementById('startProcessBtn').addEventListener('click', function() {
+    if (startPoint) {
+        const selectedAlgorithm = document.getElementById('algorithm').value;
+        if (selectedAlgorithm === 'dfs') {
+            startCleaningDFS();
+        } else if (selectedAlgorithm === 'bfs') {
+            startCleaningBFS();
+        } else if (selectedAlgorithm === 'best') {
+            startCleaningBestFirst();
+        } else if (selectedAlgorithm === 'astar') {
+            startCleaningAStar();
+        }
+    } else {
+        alert('請先設置起點並放置機器人！');
+    }
+});
+
+document.getElementById('resetBtn').addEventListener('click', function() {
+    if (cleaningInterval) {
+        clearInterval(cleaningInterval);
+        cleaningInterval = null;
+    }
+    startPoint = null;
+    robotPosition = {row: null, col: null};
+    createGrid();
+});
+
+async function startCleaningDFS() {
+    let {row: startRow, col: startCol} = robotPosition;
+
+    let stack = [[startRow, startCol]];
+    let path = [];
+    let visited = Array.from({length: numRows}, () => Array(numCols).fill(false));
+    visited[startRow][startCol] = true;
+
+    while (stack.length > 0) {
+        let [row, col] = stack.pop();
+        let gridItem = gridMatrix[row][col];
+        gridItem.style.backgroundColor = 'green';
+        path.push([row, col]);
+        await delay(500);
+        moveRobotTo(row, col);
+
+        let directions = [
+            [0, 1],   // 右
+            [1, 0],   // 下
+            [0, -1],  // 左
+            [-1, 0]   // 上
+        ];
+
+        for (let [dRow, dCol] of directions) {
+            let newRow = row + dRow;
+            let newCol = col + dCol;
+            if (newRow >= 0 && newRow < numRows && newCol >= 0 && newCol < numCols &&
+                (gridMatrix[newRow][newCol].style.backgroundColor === 'white' || gridMatrix[newRow][newCol].style.backgroundColor === 'red') &&
+                !visited[newRow][newCol]) {
+                visited[newRow][newCol] = true;
+                stack.push([newRow, newCol]);
+            }
+        }
+    }
+
+    // 將清掃路徑標記為藍色（已清掃）
+    for (let [row, col] of path) {
+        gridMatrix[row][col].style.backgroundColor = 'blue';
+    }
+
+    // 最後將起點恢復為紅色並返回起點
+    startPoint.style.backgroundColor = startColor;
+    for (let i = path.length - 1; i >= 0; i--) {
+        let [row, col] = path[i];
+        await delay(500);
+        moveRobotTo(row, col);
+    }
+    moveRobotTo(startRow, startCol);
+}
+
+async function startCleaningBFS() {
+    let {row: startRow, col: startCol} = robotPosition;
+
+    let queue = [[startRow, startCol]];
+    let path = [];
+    let visited = Array.from({length: numRows}, () => Array(numCols).fill(false));
+    visited[startRow][startCol] = true;
+
+    while (queue.length > 0) {
+        let [row, col] = queue.shift();
+        let gridItem = gridMatrix[row][col];
+        gridItem.style.backgroundColor = 'green';
+        path.push([row, col]);
+        await delay(500);
+        moveRobotTo(row, col);
+
+        let directions = [
+            [0, 1],   // 右
+            [1, 0],   // 下
+            [0, -1],  // 左
+            [-1, 0]   // 上
+        ];
+
+        for (let [dRow, dCol] of directions) {
+            let newRow = row + dRow;
+            let newCol = col + dCol;
+            if (newRow >= 0 && newRow < numRows && newCol >= 0 && newCol < numCols &&
+                (gridMatrix[newRow][newCol].style.backgroundColor === 'white' || gridMatrix[newRow][newCol].style.backgroundColor === 'red') &&
+                !visited[newRow][newCol]) {
+                visited[newRow][newCol] = true;
+                queue.push([newRow, newCol]);
+            }
+        }
+    }
+
+    // 將清掃路徑標記為藍色（已清掃）
+    for (let [row, col] of path) {
+        gridMatrix[row][col].style.backgroundColor = 'blue';
+    }
+
+    // 最後將起點恢復為紅色並返回起點
+    startPoint.style.backgroundColor = startColor;
+    for (let i = path.length - 1; i >= 0; i--) {
+        let [row, col] = path[i];
+        await delay(500);
+        moveRobotTo(row, col);
+    }
+    moveRobotTo(startRow, startCol);
+}
+
+async function startCleaningBestFirst() {
+    let {row: startRow, col: startCol} = robotPosition;
+
+    let openList = [{row: startRow, col: startCol, h: heuristic(startRow, startCol)}];
+    let path = [];
+    let visited = Array.from({length: numRows}, () => Array(numCols).fill(false));
+    visited[startRow][startCol] = true;
+
+    while (openList.length > 0) {
+        openList.sort((a, b) => a.h - b.h); // 按啟發式函數排序
+        let {row, col} = openList.shift();
+        let gridItem = gridMatrix[row][col];
+        gridItem.style.backgroundColor = 'green';
+        path.push([row, col]);
+        await delay(500);
+        moveRobotTo(row, col);
+
+        let directions = [
+            [0, 1],   // 右
+            [1, 0],   // 下
+            [0, -1],  // 左
+            [-1, 0]   // 上
+        ];
+
+        for (let [dRow, dCol] of directions) {
+            let newRow = row + dRow;
+            let newCol = col + dCol;
+            if (newRow >= 0 && newRow < numRows && newCol >= 0 && newCol < numCols &&
+                (gridMatrix[newRow][newCol].style.backgroundColor === 'white' || gridMatrix[newRow][newCol].style.backgroundColor === 'red') &&
+                !visited[newRow][newCol]) {
+                visited[newRow][newCol] = true;
+                openList.push({row: newRow, col: newCol, h: heuristic(newRow, newCol)});
+            }
+        }
+    }
+
+    // 將清掃路徑標記為藍色（已清掃）
+    for (let [row, col] of path) {
+        gridMatrix[row][col].style.backgroundColor = 'blue';
+    }
+
+    // 最後將起點恢復為紅色並返回起點
+    startPoint.style.backgroundColor = startColor;
+    for (let i = path.length - 1; i >= 0; i--) {
+        let [row, col] = path[i];
+        await delay(500);
+        moveRobotTo(row, col);
+    }
+    moveRobotTo(startRow, startCol);
+}
+
+async function startCleaningAStar() {
+    let {row: startRow, col: startCol} = robotPosition;
+
+    let openList = [{row: startRow, col: startCol, g: 0, h: heuristic(startRow, startCol), f: heuristic(startRow, startCol)}];
+    let cameFrom = {};
+    let path = [];
+    let visited = Array.from({length: numRows}, () => Array(numCols).fill(false));
+    visited[startRow][startCol] = true;
+
+    while (openList.length > 0) {
+        openList.sort((a, b) => a.f - b.f); // 按 f 值排序
+        let {row, col} = openList.shift();
+        let gridItem = gridMatrix[row][col];
+        gridItem.style.backgroundColor = 'green';
+        path.push([row, col]);
+        await delay(500);
+        moveRobotTo(row, col);
+
+        let directions = [
+            [0, 1],   // 右
+            [1, 0],   // 下
+            [0, -1],  // 左
+            [-1, 0]   // 上
+        ];
+
+        for (let [dRow, dCol] of directions) {
+            let newRow = row + dRow;
+            let newCol = col + dCol;
+            if (newRow >= 0 && newRow < numRows && newCol >= 0 && newCol < numCols &&
+                (gridMatrix[newRow][newCol].style.backgroundColor === 'white' || gridMatrix[newRow][newCol].style.backgroundColor === 'red') &&
+                !visited[newRow][newCol]) {
+                visited[newRow][newCol] = true;
+                let g = path.length; // 假設每一步的成本為 1
+                let h = heuristic(newRow, newCol);
+                let f = g + h;
+                openList.push({row: newRow, col: newCol, g, h, f});
+                cameFrom[`${newRow},${newCol}`] = {row, col};
+            }
+        }
+    }
+
+    // 將清掃路徑標記為藍色（已清掃）
+    for (let [row, col] of path) {
+        gridMatrix[row][col].style.backgroundColor = 'blue';
+    }
+
+    // 最後將起點恢復為紅色並返回起點
+    startPoint.style.backgroundColor = startColor;
+    for (let i = path.length - 1; i >= 0; i--) {
+        let [row, col] = path[i];
+        await delay(500);
+        moveRobotTo(row, col);
+    }
+    moveRobotTo(startRow, startCol);
+}
+
+function heuristic(row, col) {
+    let endRow = parseInt(startPoint.dataset.row);
+    let endCol = parseInt(startPoint.dataset.col);
+    return Math.abs(row - endRow) + Math.abs(col - endCol); // 曼哈頓距離
+}
+
+function moveRobotTo(row, col) {
+    const cellSize = parseInt(document.getElementById('cellSize').value);
+    robot.style.transform = `translate(${col * cellSize}px, ${row * cellSize}px)`;
+}
+
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+</script>
+</body>
+</html>
