@@ -183,22 +183,23 @@ async function startCleaning() {
         moveRobotTo(row, col);
 
         let directions = [
-            [0, 1],   // 右
-            [1, 0],   // 下
-            [0, -1],  // 左
-            [-1, 0]   // 上
-        ];
+    [0, 1],   // 右
+    [1, 0],   // 下
+    [0, -1],  // 左
+    [-1, 0]   // 上
+];
 
-        for (let [dRow, dCol] of directions) {
-            let newRow = row + dRow;
-            let newCol = col + dCol;
-            if (newRow >= 0 && newRow < numRows && newCol >= 0 && newCol < numCols &&
-                (gridMatrix[newRow][newCol].style.backgroundColor === 'white' || gridMatrix[newRow][newCol].style.backgroundColor === 'red') &&
-                !visited[newRow][newCol]) {
-                visited[newRow][newCol] = true;
-                stack.push([newRow, newCol]);
-            }
-        }
+for (let [dRow, dCol] of directions) {
+    let newRow = row + dRow;
+    let newCol = col + dCol;
+    if (newRow >= 0 && newRow < numRows && newCol >= 0 && newCol < numCols &&
+        (gridMatrix[newRow][newCol].style.backgroundColor === 'white' || gridMatrix[newRow][newCol].style.backgroundColor === 'red') &&
+        !visited[newRow][newCol]) {
+        visited[newRow][newCol] = true;
+        stack.push([newRow, newCol]);
+    }
+}
+
     }
 
     // 将清扫路径标记为蓝色（已清扫）

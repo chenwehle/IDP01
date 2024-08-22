@@ -1,8 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="viewport" content="width=device-width, initial-scale=1.0">
 <title>顏色網格</title>
 <style>
     .grid-container {
@@ -19,20 +18,12 @@
         position: relative;
     }
 
-    .coord {
-        position: absolute;
-        bottom: 0;
-        right: 0;
-        font-size: 10px;
-        color: white;
-        background-color: rgba(0, 0, 0, 0.5);
-        padding: 2px;
-    }
-
     .robot {
         width: 100%;
         height: 100%;
-        background-color: green;
+        background-image: url('robot-icon.png');
+        background-size: contain;
+        background-repeat: no-repeat;
         position: absolute;
     }
 </style>
@@ -55,7 +46,15 @@
     <button id="areaBtn">區域編輯</button>
     <label>紅色(充電台)</label>
     <button id="startBtn">起點放置</button>
+    <label for="algorithmSelect">選擇演算法:</label>
+    <select id="algorithmSelect">
+        <option value="dfs">深度優先搜尋 (DFS)</option>
+        <option value="wallFollower">左右牆法則</option>
+        <option value="randomScan">隨機掃描 (Random Scan)</option>
+    </select>
     <button id="startProcessBtn">開始</button>
+    <button id="resetBtn">復原地圖</button>
+    <button id="clearBtn">清除所有設定</button>
 </div>
 
 <script>
@@ -63,6 +62,12 @@ let editMode = 'border';
 let startColor = 'red';
 let startPoint = null;
 let robot = null;
+let visited = new Set();
+let initialGridState = [];
+let savedGridState = [];
+let savedStartPoint = null;
+let whiteCellsToClean = new Set(); 
+let isRunning = false; // 用於檢查機器人是否正在運行
 
 createGrid();
 
@@ -78,33 +83,47 @@ function createGrid() {
     document.querySelector('.grid-container').innerHTML = '';
 
     const gridContainer = document.querySelector('.grid-container');
+    initialGridState = []; 
+    whiteCellsToClean.clear();
+
     for (let i = 0; i < numRows; i++) {
         for (let j = 0; j < numCols; j++) {
             const gridItem = document.createElement('div');
             gridItem.classList.add('grid-item');
-            gridItem.style.gridColumn = j + 1;
-            gridItem.style.gridRow = i + 1;
+            gridItem.style.gridColumnStart = j + 1;
+            gridItem.style.gridRowStart = i + 1;
+            gridItem.style.backgroundColor = 'lightblue'; 
+
+            initialGridState.push({
+                row: i + 1,
+                col: j + 1,
+                color: 'lightblue'
+            });
 
             gridItem.addEventListener("contextmenu", e => e.preventDefault());
             gridItem.addEventListener('mousedown', function(event) {
-                if (event.button === 0) {
-                    switch (editMode) {
-                        case 'border':
-                            gridItem.style.backgroundColor = 'black';
-                            break;
-                        case 'area':
-                            gridItem.style.backgroundColor = 'white';
-                            break;
-                        case 'start':
-                            if (startPoint) {
-                                startPoint.style.backgroundColor = 'lightblue';
-                            }
-                            gridItem.style.backgroundColor = startColor;
-                            startPoint = gridItem;
-                            break;
+                if (!isRunning) { // 只有在機器人未運行時允許編輯
+                    if (event.button === 0) {
+                        switch (editMode) {
+                            case 'border':
+                                gridItem.style.backgroundColor = 'black';
+                                break;
+                            case 'area':
+                                gridItem.style.backgroundColor = 'white';
+                                whiteCellsToClean.add(`${i + 1},${j + 1}`);
+                                break;
+                            case 'start':
+                                if (startPoint) {
+                                    startPoint.style.backgroundColor = 'lightblue';
+                                }
+                                gridItem.style.backgroundColor = startColor;
+                                startPoint = gridItem;
+                                break;
+                        }
+                    } else if (event.button === 2) {
+                        gridItem.style.backgroundColor = 'lightblue';
+                        whiteCellsToClean.delete(`${i + 1},${j + 1}`);
                     }
-                } else if (event.button === 2) {
-                    gridItem.style.backgroundColor = 'lightblue';
                 }
             });
             gridContainer.appendChild(gridItem);
@@ -132,38 +151,135 @@ document.getElementById('startProcessBtn').addEventListener('click', function() 
         robot = document.createElement('div');
         robot.classList.add('robot');
         startPoint.appendChild(robot);
-        moveRobot(startPoint);
+        visited.clear();
+        isRunning = true; // 標記為運行狀態
+
+        saveGridState();
+
+        const algorithm = document.getElementById('algorithmSelect').value;
+        if (algorithm === 'dfs') {
+            moveRobotDFS(startPoint);
+        } else if (algorithm === 'wallFollower') {
+            moveRobotWallFollower(startPoint);
+        } else if (algorithm === 'randomScan') {
+            moveRobotRandomScan(startPoint);
+        }
     } else {
         alert('請先設置起點！');
     }
 });
 
-function moveRobot(startPoint) {
+document.getElementById('resetBtn').addEventListener('click', resetGrid);
+document.getElementById('clearBtn').addEventListener('click', clearGrid);
+
+function saveGridState() {
+    const gridContainer = document.querySelector('.grid-container');
+    savedGridState = Array.from(gridContainer.children).map(item => ({
+        row: parseInt(item.style.gridRowStart),
+        col: parseInt(item.style.gridColumnStart),
+        color: item.style.backgroundColor,
+        isVisited: visited.has(item)
+    }));
+    savedStartPoint = startPoint;
+}
+
+function resetGrid() {
+    const gridContainer = document.querySelector('.grid-container');
+    gridContainer.innerHTML = '';
+    savedGridState.forEach(cellState => {
+        const gridItem = document.createElement('div');
+        gridItem.classList.add('grid-item');
+        gridItem.style.gridColumnStart = cellState.col;
+        gridItem.style.gridRowStart = cellState.row;
+        gridItem.style.backgroundColor = cellState.color;
+
+        gridContainer.appendChild(gridItem);
+
+        if (cellState.isVisited) {
+            visited.add(gridItem);
+        }
+
+        if (gridItem === savedStartPoint) {
+            startPoint = gridItem;
+            gridItem.appendChild(robot);
+        }
+    });
+    isRunning = false; // 恢復到非運行狀態，允許編輯
+}
+
+function clearGrid() {
+    const gridContainer = document.querySelector('.grid-container');
+    Array.from(gridContainer.children).forEach(cell => {
+        cell.style.backgroundColor = 'lightblue'; 
+    });
+    startPoint = null;
+    robot?.remove();
+    robot = null;
+    visited.clear();
+    whiteCellsToClean.clear();
+    isRunning = false; // 恢復到非運行狀態，允許編輯
+}
+
+function moveRobotDFS(startPoint) {
     const directions = [
-        { x: 0, y: -1 },
-        { x: 1, y: 0 },
-        { x: 0, y: 1 },
-        { x: -1, y: 0 }
+        { x: 0, y: -1 }, 
+        { x: 1, y: 0 },  
+        { x: 0, y: 1 },  
+        { x: -1, y: 0 }  
     ];
 
+    let stack = [{ cell: startPoint, direction: 0 }];
     let currentCell = startPoint;
     let directionIndex = 0;
+
+    function getCell(x, y) {
+        return Array.from(document.querySelectorAll('.grid-item')).find(cell => {
+            return parseInt(cell.style.gridColumnStart) === x + 1 && parseInt(cell.style.gridRowStart) === y + 1;
+        });
+    }
+
+    function canMoveTo(cell) {
+        return cell && (cell.style.backgroundColor === 'white' || cell === startPoint) && !visited.has(cell);
+    }
 
     function move() {
         if (!currentCell) return;
 
-        const nextX = currentCell.style.gridColumnStart - 1 + directions[directionIndex].x;
-        const nextY = currentCell.style.gridRowStart - 1 + directions[directionIndex].y;
+        if (currentCell !== startPoint) {
+            currentCell.style.backgroundColor = 'yellow';
+        }
+        visited.add(currentCell);
 
-        const nextCell = Array.from(document.querySelectorAll('.grid-item')).find(cell => {
-            return parseInt(cell.style.gridColumnStart) === nextX + 1 && parseInt(cell.style.gridRowStart) === nextY + 1;
-        });
+        let moved = false;
+        for (let i = 0; i < directions.length; i++) {
+            const nextDirectionIndex = (directionIndex + i) % 4;
+            const nextDir = directions[nextDirectionIndex];
+            const nextX = currentCell.style.gridColumnStart - 1 + nextDir.x;
+            const nextY = currentCell.style.gridRowStart - 1 + nextDir.y;
+            const nextCell = getCell(nextX, nextY);
 
-        if (nextCell && nextCell.style.backgroundColor === 'white') {
-            nextCell.appendChild(robot);
-            currentCell = nextCell;
-        } else {
-            directionIndex = (directionIndex + 1) % 4;
+            if (canMoveTo(nextCell)) {
+                stack.push({ cell: currentCell, direction: directionIndex });
+                directionIndex = nextDirectionIndex;
+                currentCell = nextCell;
+                currentCell.appendChild(robot);
+                moved = true;
+                break;
+            }
+        }
+
+        if (!moved && stack.length > 0) {
+            currentCell.style.backgroundColor = 'blue';
+            const previous = stack.pop();
+            currentCell = previous.cell;
+            directionIndex = previous.direction;
+            currentCell.appendChild(robot);
+        }
+
+        if (currentCell === startPoint && stack.length === 0) {
+            alert('機器人已完成遍歷並返回起點！');
+            isRunning = false; // 結束後允許編輯
+            return;
         }
 
         setTimeout(move, 500);
@@ -171,6 +287,136 @@ function moveRobot(startPoint) {
 
     move();
 }
+
+function moveRobotWallFollower(startPoint) {
+    const directions = [
+        { x: 0, y: -1 }, 
+        { x: 1, y: 0 },  
+        { x: 0, y: 1 },  
+        { x: -1, y: 0 }  
+    ];
+
+    let directionIndex = 0;
+    let currentCell = startPoint;
+
+    function getCell(x, y) {
+        return Array.from(document.querySelectorAll('.grid-item')).find(cell => {
+            return parseInt(cell.style.gridColumnStart) === x + 1 && parseInt(cell.style.gridRowStart) === y + 1;
+        });
+    }
+
+    function canMoveTo(cell) {
+        return cell && (cell.style.backgroundColor === 'white' || cell === startPoint);
+    }
+
+    function move() {
+        if (!currentCell) return;
+
+        if (currentCell !== startPoint) {
+            currentCell.style.backgroundColor = 'yellow';
+        }
+        visited.add(currentCell);
+
+        const rightDir = directions[(directionIndex + 1) % 4];
+        const frontDir = directions[directionIndex];
+
+        const rightX = currentCell.style.gridColumnStart - 1 + rightDir.x;
+        const rightY = currentCell.style.gridRowStart - 1 + rightDir.y;
+        const rightCell = getCell(rightX, rightY);
+
+        const frontX = currentCell.style.gridColumnStart - 1 + frontDir.x;
+        const frontY = currentCell.style.gridRowStart - 1 + frontDir.y;
+        const frontCell = getCell(frontX, frontY);
+
+        if (canMoveTo(rightCell) && !visited.has(rightCell)) {
+            directionIndex = (directionIndex + 1) % 4;
+            currentCell = rightCell;
+        } else if (canMoveTo(frontCell) && !visited.has(frontCell)) {
+            currentCell = frontCell;
+        } else {
+            directionIndex = (directionIndex + 3) % 4; 
+            if (stack.length > 0) {
+                currentCell = stack.pop();
+            }
+        }
+
+        currentCell.appendChild(robot);
+
+        if (whiteCellsToClean.size === 0) {
+            alert('所有白色格子已清掃完畢！');
+            isRunning = false; // 結束後允許編輯
+            return;
+        }
+
+        setTimeout(move, 500);
+    }
+
+    move();
+}
+
+function moveRobotRandomScan(startPoint) { 
+    const directions = [
+        { x: 0, y: -1 }, 
+        { x: 1, y: 0 },  
+        { x: 0, y: 1 },  
+        { x: -1, y: 0 }  
+    ];
+
+    let currentCell = startPoint;
+    let stack = [currentCell];
+
+    function getCell(x, y) {
+        return Array.from(document.querySelectorAll('.grid-item')).find(cell => {
+            return parseInt(cell.style.gridColumnStart) === x + 1 && parseInt(cell.style.gridRowStart) === y + 1;
+        });
+    }
+
+    function canMoveTo(cell) {
+        return cell && (cell.style.backgroundColor === 'white' || cell === startPoint);
+    }
+
+    function move() {
+        if (!currentCell) return;
+
+        if (currentCell !== startPoint) {
+            currentCell.style.backgroundColor = 'yellow';
+        }
+        visited.add(currentCell);
+        whiteCellsToClean.delete(`${currentCell.style.gridRowStart},${currentCell.style.gridColumnStart}`);
+
+        let validMove = false;
+        for (let i = 0; i < 4; i++) {
+            const directionIndex = Math.floor(Math.random() * 4); 
+            const nextDir = directions[directionIndex];
+            const nextX = currentCell.style.gridColumnStart - 1 + nextDir.x;
+            const nextY = currentCell.style.gridRowStart - 1 + nextDir.y;
+            const nextCell = getCell(nextX, nextY);
+
+            if (canMoveTo(nextCell) && !visited.has(nextCell)) {
+                stack.push(currentCell); 
+                currentCell = nextCell;
+                currentCell.appendChild(robot);
+                validMove = true;
+                break;
+            }
+        }
+
+        if (!validMove && stack.length > 0) {
+            currentCell = stack.pop(); 
+        }
+
+        if (whiteCellsToClean.size === 0) { 
+            alert('所有白色格子已清掃完畢！');
+            isRunning = false; // 結束後允許編輯
+            return;
+        }
+
+        setTimeout(move, 500);
+    }
+
+    move();
+}
+
 </script>
 </body>
 </html>
